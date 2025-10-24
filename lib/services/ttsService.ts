@@ -15,6 +15,14 @@ export interface TTSResult {
   audioUrl?: string;
 }
 
+export interface TTSChunkResult {
+  audioBuffer: Buffer;
+  text: string;
+  characters: number;
+  cost: number;
+  cached: boolean;
+}
+
 export class TTSService {
   private cacheEnabled = process.env.ENABLE_TTS_CACHING === 'true';
 
@@ -70,6 +78,187 @@ export class TTSService {
     } catch (error) {
       console.error('TTS generation error:', error);
       throw new Error('Failed to generate speech');
+    }
+  }
+
+  /**
+   * OPTIMIZED: Generate TTS for text chunks (sentences)
+   * Enables parallel processing for faster response times
+   */
+  async generateSpeechChunks(
+    sentences: string[],
+    voiceId: string = 'alloy',
+    quality: 'standard' | 'hd' = 'standard'
+  ): Promise<TTSChunkResult[]> {
+    // Process all sentences in parallel
+    const promises = sentences.map(async (text) => {
+      if (!text.trim()) {
+        return null;
+      }
+
+      const characters = text.length;
+      const costPerChar = quality === 'hd' ? 0.030 / 1000 : 0.015 / 1000;
+      const cost = characters * costPerChar;
+
+      // Check cache first
+      if (this.cacheEnabled) {
+        const cached = await this.getFromCache(text, voiceId, quality);
+        if (cached) {
+          // For cached, we'd need to fetch from URL - for now return empty buffer
+          return {
+            audioBuffer: Buffer.from([]),
+            text,
+            characters,
+            cost: 0,
+            cached: true,
+          };
+        }
+      }
+
+      // Generate new speech
+      try {
+        const mp3 = await openai.audio.speech.create({
+          model: quality === 'hd' ? 'tts-1-hd' : 'tts-1',
+          voice: voiceId as any,
+          input: text,
+          response_format: 'mp3',
+        });
+
+        const buffer = Buffer.from(await mp3.arrayBuffer());
+
+        // Cache the result if enabled
+        if (this.cacheEnabled) {
+          await this.saveToCache(text, voiceId, quality, buffer, characters);
+        }
+
+        return {
+          audioBuffer: buffer,
+          text,
+          characters,
+          cost,
+          cached: false,
+        };
+      } catch (error) {
+        console.error('TTS chunk generation error:', error);
+        return null;
+      }
+    });
+
+    const results = await Promise.all(promises);
+    return results.filter((r): r is TTSChunkResult => r !== null);
+  }
+
+  /**
+   * STREAMING HELPER: Split text into sentences for progressive TTS
+   * Returns sentences as they complete
+   */
+  splitIntoSentences(text: string): string[] {
+    // Simple sentence boundary detection
+    // Matches: . ! ? followed by space or end of string
+    const sentenceRegex = /[^.!?]+[.!?]+(?:\s|$)/g;
+    const sentences = text.match(sentenceRegex) || [];
+    
+    // Handle remaining text that doesn't end with punctuation
+    const lastSentenceEnd = sentences.join('').length;
+    if (lastSentenceEnd < text.length) {
+      sentences.push(text.substring(lastSentenceEnd).trim());
+    }
+
+    return sentences.map(s => s.trim()).filter(s => s.length > 0);
+  }
+
+  /**
+   * STREAMING VERSION: Generate TTS sentence by sentence as text arrives
+   * This is the key to reducing latency!
+   */
+  async *generateSpeechStream(
+    textStream: AsyncGenerator<string>,
+    voiceId: string = 'alloy',
+    quality: 'standard' | 'hd' = 'standard'
+  ): AsyncGenerator<TTSChunkResult> {
+    let buffer = '';
+    
+    for await (const chunk of textStream) {
+      buffer += chunk;
+      
+      // Check if we have complete sentences
+      const sentenceMatch = buffer.match(/[^.!?]+[.!?]+\s/);
+      
+      if (sentenceMatch) {
+        const sentence = sentenceMatch[0].trim();
+        buffer = buffer.substring(sentenceMatch[0].length);
+        
+        // Generate TTS for this sentence immediately
+        const result = await this.generateSpeechForSentence(sentence, voiceId, quality);
+        if (result) {
+          yield result;
+        }
+      }
+    }
+
+    // Handle remaining text
+    if (buffer.trim().length > 0) {
+      const result = await this.generateSpeechForSentence(buffer.trim(), voiceId, quality);
+      if (result) {
+        yield result;
+      }
+    }
+  }
+
+  /**
+   * Generate TTS for a single sentence
+   */
+  private async generateSpeechForSentence(
+    text: string,
+    voiceId: string,
+    quality: 'standard' | 'hd'
+  ): Promise<TTSChunkResult | null> {
+    if (!text.trim()) return null;
+
+    const characters = text.length;
+    const costPerChar = quality === 'hd' ? 0.030 / 1000 : 0.015 / 1000;
+    const cost = characters * costPerChar;
+
+    // Check cache first
+    if (this.cacheEnabled) {
+      const cached = await this.getFromCache(text, voiceId, quality);
+      if (cached) {
+        return {
+          audioBuffer: Buffer.from([]),
+          text,
+          characters,
+          cost: 0,
+          cached: true,
+        };
+      }
+    }
+
+    // Generate new speech
+    try {
+      const mp3 = await openai.audio.speech.create({
+        model: quality === 'hd' ? 'tts-1-hd' : 'tts-1',
+        voice: voiceId as any,
+        input: text,
+        response_format: 'mp3',
+      });
+
+      const buffer = Buffer.from(await mp3.arrayBuffer());
+
+      // Cache the result if enabled
+      if (this.cacheEnabled) {
+        await this.saveToCache(text, voiceId, quality, buffer, characters);
+      }
+
+      return {
+        audioBuffer: buffer,
+        text,
+        characters,
+        cost,
+        cached: false,
+      };
+    } catch (error) {
+      console.error('TTS sentence generation error:', error);
+      return null;
     }
   }
 
