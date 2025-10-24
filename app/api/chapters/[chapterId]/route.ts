@@ -3,9 +3,9 @@ import { getDatabase } from '@/lib/db';
 import { Chapter, COLLECTIONS } from '@/backend/src/models/database';
 import { withAuth, corsHeaders } from '@/lib/middleware';
 
-export const GET = withAuth(async (req, { params }: { params: { chapterId: string } }) => {
+export const GET = withAuth(async (req, context) => {
   try {
-    const { chapterId } = params;
+    const { chapterId } = context?.params as { chapterId: string };
 
     const db = await getDatabase();
     const chaptersCollection = db.collection<Chapter>(COLLECTIONS.CHAPTERS);
