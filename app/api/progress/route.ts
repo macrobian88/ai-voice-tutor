@@ -85,8 +85,9 @@ export const POST = withAuth(async (req: AuthenticatedNextRequest) => {
         updatedAt: now,
       };
 
-      await progressCollection.insertOne(newProgress);
-      progress = newProgress;
+      const result = await progressCollection.insertOne(newProgress);
+      // Assign the inserted ID to create a complete document
+      progress = { ...newProgress, _id: result.insertedId };
     } else {
       // Update existing progress
       const chapterIndex = progress.chapters.findIndex(c => c.chapterId === chapterId);
