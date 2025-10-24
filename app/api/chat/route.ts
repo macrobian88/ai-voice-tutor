@@ -78,10 +78,8 @@ export const POST = withAuth(async (req: AuthenticatedNextRequest) => {
         .collection<Session>(COLLECTIONS.SESSIONS)
         .findOne({ _id: new ObjectId(sessionId) });
       if (session) {
-        history = session.messages.map((msg) => ({
-          role: msg.role,
-          content: msg.content,
-        }));
+        // Include full message objects with timestamps
+        history = session.messages;
       }
     }
 
