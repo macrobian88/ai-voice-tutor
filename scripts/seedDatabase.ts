@@ -34,61 +34,72 @@ if (!MONGODB_URI) {
 }
 
 // Common TTS responses to cache
+// Note: In production, these would have actual audio URLs after generation
 const COMMON_TTS_RESPONSES: Omit<CachedTTSResponse, '_id'>[] = [
   {
+    textHash: 'hash1',
     text: "Hello! I'm your AI tutor. I'm here to help you learn. What would you like to study today?",
-    audioUrl: null,
-    audioBuffer: Buffer.from(''),
+    voiceId: 'alloy',
+    quality: 'standard',
+    audioUrl: 'https://placeholder.example.com/tts/greeting.mp3',
     characters: 95,
-    voice: 'alloy',
-    model: 'tts-1',
-    createdAt: new Date(),
+    durationMs: 6000,
+    hitCount: 0,
     lastUsed: new Date(),
-    useCount: 0,
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    createdAt: new Date(),
   },
   {
+    textHash: 'hash2',
     text: "That's a great question! Let me explain that for you.",
-    audioUrl: null,
-    audioBuffer: Buffer.from(''),
+    voiceId: 'alloy',
+    quality: 'standard',
+    audioUrl: 'https://placeholder.example.com/tts/great-question.mp3',
     characters: 56,
-    voice: 'alloy',
-    model: 'tts-1',
-    createdAt: new Date(),
+    durationMs: 3500,
+    hitCount: 0,
     lastUsed: new Date(),
-    useCount: 0,
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    createdAt: new Date(),
   },
   {
+    textHash: 'hash3',
     text: "That's from a different chapter! We're currently focusing on this topic. Let's stay on track.",
-    audioUrl: null,
-    audioBuffer: Buffer.from(''),
+    voiceId: 'alloy',
+    quality: 'standard',
+    audioUrl: 'https://placeholder.example.com/tts/different-chapter.mp3',
     characters: 94,
-    voice: 'alloy',
-    model: 'tts-1',
-    createdAt: new Date(),
+    durationMs: 6000,
+    hitCount: 0,
     lastUsed: new Date(),
-    useCount: 0,
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    createdAt: new Date(),
   },
   {
+    textHash: 'hash4',
     text: "Excellent work! You're really getting the hang of this.",
-    audioUrl: null,
-    audioBuffer: Buffer.from(''),
+    voiceId: 'alloy',
+    quality: 'standard',
+    audioUrl: 'https://placeholder.example.com/tts/excellent-work.mp3',
     characters: 56,
-    voice: 'alloy',
-    model: 'tts-1',
-    createdAt: new Date(),
+    durationMs: 3500,
+    hitCount: 0,
     lastUsed: new Date(),
-    useCount: 0,
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    createdAt: new Date(),
   },
   {
+    textHash: 'hash5',
     text: "That's covered in a future chapter. For now, let's master this topic first.",
-    audioUrl: null,
-    audioBuffer: Buffer.from(''),
+    voiceId: 'alloy',
+    quality: 'standard',
+    audioUrl: 'https://placeholder.example.com/tts/future-chapter.mp3',
     characters: 77,
-    voice: 'alloy',
-    model: 'tts-1',
-    createdAt: new Date(),
+    durationMs: 5000,
+    hitCount: 0,
     lastUsed: new Date(),
-    useCount: 0,
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    createdAt: new Date(),
   },
 ];
 
@@ -217,7 +228,7 @@ async function seedTTSCache(db: Db) {
 
     for (const response of COMMON_TTS_RESPONSES) {
       const exists = existingResponses.some(
-        (existing) => existing.text === response.text && existing.voice === response.voice
+        (existing) => existing.text === response.text && existing.voiceId === response.voiceId
       );
 
       if (!exists) {
