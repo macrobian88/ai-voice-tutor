@@ -23,6 +23,16 @@ export interface ClaudeResponse {
   scopeConfidence: number;
 }
 
+export interface ClaudeStreamChunk {
+  text: string;
+  isComplete: boolean;
+  tokensUsed?: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+  };
+}
+
 // Extended type for prompt caching support
 type SystemPromptWithCache = Array<{
   type: 'text';
@@ -34,7 +44,7 @@ export class ClaudeService {
   private promptCachingEnabled = process.env.ENABLE_PROMPT_CACHING === 'true';
 
   /**
-   * Chat with Claude using chapter context
+   * Chat with Claude using chapter context (NON-STREAMING)
    * Implements prompt caching for cost savings
    */
   async chat(
@@ -126,6 +136,104 @@ export class ClaudeService {
     } catch (error) {
       console.error('Claude API error:', error);
       throw new Error('Failed to generate response');
+    }
+  }
+
+  /**
+   * STREAMING version: Chat with Claude and stream responses
+   * This enables much faster time-to-first-token
+   */
+  async *chatStream(
+    userMessage: string,
+    chapter: Chapter,
+    history: ClaudeMessage[] = [],
+    scopeCheck: { inScope: boolean; confidence: number; reason?: string }
+  ): AsyncGenerator<ClaudeStreamChunk> {
+    // If question is off-topic, return generic response immediately
+    if (!scopeCheck.inScope || scopeCheck.confidence < 0.3) {
+      const genericResponse = this.selectGenericResponse(userMessage, chapter.title);
+      yield {
+        text: genericResponse,
+        isComplete: true,
+        tokensUsed: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedInputTokens: 0,
+        },
+      };
+      return;
+    }
+
+    // Build system prompt with chapter context
+    const systemPrompt = this.buildSystemPrompt(chapter);
+
+    // Prepare messages
+    const messages: Anthropic.MessageParam[] = [
+      ...history.map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+      })),
+      {
+        role: 'user' as const,
+        content: userMessage,
+      },
+    ];
+
+    try {
+      // Build request parameters for streaming
+      const requestParams: Anthropic.MessageCreateParamsStreaming = {
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 2048,
+        messages,
+        system: systemPrompt,
+        stream: true,
+      };
+
+      // Add prompt caching if enabled
+      if (this.promptCachingEnabled) {
+        const systemWithCache: SystemPromptWithCache = [
+          {
+            type: 'text',
+            text: systemPrompt,
+            cache_control: { type: 'ephemeral' },
+          },
+        ];
+        requestParams.system = systemWithCache as any;
+      }
+
+      // Stream Claude response
+      const stream = await anthropic.messages.stream(requestParams);
+
+      let fullText = '';
+
+      for await (const chunk of stream) {
+        if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
+          fullText += chunk.delta.text;
+          yield {
+            text: chunk.delta.text,
+            isComplete: false,
+          };
+        }
+
+        // Final message with usage stats
+        if (chunk.type === 'message_stop') {
+          const finalMessage = await stream.finalMessage();
+          const usage = finalMessage.usage;
+          
+          yield {
+            text: '',
+            isComplete: true,
+            tokensUsed: {
+              inputTokens: usage.input_tokens,
+              outputTokens: usage.output_tokens,
+              cachedInputTokens: (usage as any).cache_read_input_tokens || 0,
+            },
+          };
+        }
+      }
+    } catch (error) {
+      console.error('Claude streaming error:', error);
+      throw new Error('Failed to stream response');
     }
   }
 
