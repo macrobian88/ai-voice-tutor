@@ -23,6 +23,13 @@ export interface ClaudeResponse {
   scopeConfidence: number;
 }
 
+// Extended type for prompt caching support
+type SystemPromptWithCache = Array<{
+  type: 'text';
+  text: string;
+  cache_control?: { type: 'ephemeral' };
+}>;
+
 export class ClaudeService {
   private promptCachingEnabled = process.env.ENABLE_PROMPT_CACHING === 'true';
 
@@ -69,21 +76,29 @@ export class ClaudeService {
     ];
 
     try {
-      // Call Claude with prompt caching
-      const response = await anthropic.messages.create({
+      // Build request parameters with proper typing
+      const requestParams: Anthropic.MessageCreateParamsNonStreaming = {
         model: 'claude-sonnet-4-20250514',
         max_tokens: 2048,
-        system: this.promptCachingEnabled
-          ? [
-              {
-                type: 'text',
-                text: systemPrompt,
-                cache_control: { type: 'ephemeral' },
-              },
-            ]
-          : systemPrompt,
         messages,
-      });
+        system: systemPrompt, // Default to string
+      };
+
+      // Add prompt caching if enabled (using type assertion)
+      if (this.promptCachingEnabled) {
+        const systemWithCache: SystemPromptWithCache = [
+          {
+            type: 'text',
+            text: systemPrompt,
+            cache_control: { type: 'ephemeral' },
+          },
+        ];
+        // Use type assertion to bypass TypeScript's strict checking for prompt caching
+        requestParams.system = systemWithCache as any;
+      }
+
+      // Call Claude
+      const response = await anthropic.messages.create(requestParams);
 
       // Extract text from response
       const responseText =
