@@ -138,7 +138,7 @@ export interface CachedTTSResponse {
   text: string;
   voiceId: string;
   quality: 'standard' | 'hd';
-  audioUrl: string;
+  audioUrl?: string;  // Optional - may not be available for placeholder/cached data
   characters: number;
   durationMs: number;
   hitCount: number;
