@@ -5,10 +5,15 @@ export interface AuthenticatedNextRequest extends NextRequest {
   user?: JWTPayload;
 }
 
-export function withAuth(
-  handler: (req: AuthenticatedNextRequest) => Promise<NextResponse>
+// Type for route context with params
+type RouteContext<T = Record<string, string | string[]>> = {
+  params: T;
+};
+
+export function withAuth<T = Record<string, string | string[]>>(
+  handler: (req: AuthenticatedNextRequest, context?: RouteContext<T>) => Promise<NextResponse>
 ) {
-  return async (req: NextRequest): Promise<NextResponse> => {
+  return async (req: NextRequest, context?: RouteContext<T>): Promise<NextResponse> => {
     try {
       const authHeader = req.headers.get('authorization');
       const token = extractToken(authHeader);
@@ -26,7 +31,7 @@ export function withAuth(
       const authenticatedReq = req as AuthenticatedNextRequest;
       authenticatedReq.user = payload;
 
-      return handler(authenticatedReq);
+      return handler(authenticatedReq, context);
     } catch (error) {
       return NextResponse.json(
         { error: 'Invalid or expired token' },
