@@ -16,7 +16,7 @@ export interface TTSResult {
 }
 
 export class TTSService {
-  private cacheEnabled = process.env.ENABLE_TTS_CACHING === 'true';
+  private cacheEnabled = process.env.ENABLE_TTS_CACHING !== 'false'; // Default to enabled
 
   /**
    * Generate speech from text using OpenAI TTS
@@ -31,22 +31,37 @@ export class TTSService {
     const costPerChar = quality === 'hd' ? 0.030 / 1000 : 0.015 / 1000;
     const cost = characters * costPerChar;
 
+    console.log('🎵 TTS generateSpeech called:', {
+      textLength: characters,
+      voiceId,
+      quality,
+      cacheEnabled: this.cacheEnabled
+    });
+
     // Check cache first
     if (this.cacheEnabled) {
       const cached = await this.getFromCache(text, voiceId, quality);
       if (cached) {
+        console.log('✅ TTS cache HIT, returning cached audio');
+        // Return actual audio buffer from cache
+        const audioBuffer = cached.audioData 
+          ? Buffer.from(cached.audioData, 'base64')
+          : Buffer.from([]);
+        
         return {
-          audioBuffer: Buffer.from([]), // URL only for cached
+          audioBuffer,
           characters,
           cost: 0, // No cost for cached
           cached: true,
-          audioUrl: cached.audioUrl,
         };
+      } else {
+        console.log('❌ TTS cache MISS, generating new audio');
       }
     }
 
     // Generate new speech
     try {
+      console.log('🎤 Calling OpenAI TTS API...');
       const mp3 = await openai.audio.speech.create({
         model: quality === 'hd' ? 'tts-1-hd' : 'tts-1',
         voice: voiceId as any,
@@ -55,9 +70,11 @@ export class TTSService {
       });
 
       const buffer = Buffer.from(await mp3.arrayBuffer());
+      console.log('✅ TTS audio generated, size:', buffer.length, 'bytes');
 
       // Cache the result if enabled
       if (this.cacheEnabled) {
+        console.log('💾 Saving to TTS cache...');
         await this.saveToCache(text, voiceId, quality, buffer, characters);
       }
 
@@ -68,7 +85,7 @@ export class TTSService {
         cached: false,
       };
     } catch (error) {
-      console.error('TTS generation error:', error);
+      console.error('❌ TTS generation error:', error);
       throw new Error('Failed to generate speech');
     }
   }
@@ -80,13 +97,13 @@ export class TTSService {
     text: string,
     voiceId: string,
     quality: 'standard' | 'hd'
-  ): Promise<CachedTTSResponse | null> {
+  ): Promise<(CachedTTSResponse & { audioData?: string }) | null> {
     try {
       const db = await getDatabase();
       const textHash = this.hashText(text);
 
       const cached = await db
-        .collection<CachedTTSResponse>(COLLECTIONS.CACHED_TTS)
+        .collection<CachedTTSResponse & { audioData?: string }>(COLLECTIONS.CACHED_TTS)
         .findOne({
           textHash,
           voiceId,
@@ -94,6 +111,7 @@ export class TTSService {
         });
 
       if (cached) {
+        console.log('📦 Found cached TTS response');
         // Update hit count and last used
         await db
           .collection<CachedTTSResponse>(COLLECTIONS.CACHED_TTS)
@@ -110,7 +128,7 @@ export class TTSService {
 
       return null;
     } catch (error) {
-      console.error('TTS cache read error:', error);
+      console.error('❌ TTS cache read error:', error);
       return null;
     }
   }
@@ -126,30 +144,39 @@ export class TTSService {
     characters: number
   ): Promise<void> {
     try {
-      // In a real app, upload to R2/S3 and store URL
-      // For now, we'll store a placeholder URL
-      const audioUrl = `https://storage.example.com/tts/${this.hashText(text)}.mp3`;
-
       const db = await getDatabase();
       const textHash = this.hashText(text);
       const now = new Date();
       const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days
 
-      await db.collection<CachedTTSResponse>(COLLECTIONS.CACHED_TTS).insertOne({
+      // Store audio data as base64 in MongoDB
+      // For production, consider using GridFS or external storage (R2/S3)
+      const audioData = audioBuffer.toString('base64');
+      
+      console.log('💾 Saving TTS cache entry:', {
+        textHash: textHash.substring(0, 8) + '...',
+        audioDataSize: audioData.length,
+        characters
+      });
+
+      await db.collection(COLLECTIONS.CACHED_TTS).insertOne({
         textHash,
         text,
         voiceId,
         quality,
-        audioUrl,
+        audioUrl: null, // Not using URL storage for now
+        audioData, // Store base64-encoded audio
         characters,
-        durationMs: 0, // Calculate from audio if needed
+        durationMs: 0,
         hitCount: 0,
         lastUsed: now,
         expiresAt,
         createdAt: now,
       });
+      
+      console.log('✅ TTS cache saved successfully');
     } catch (error) {
-      console.error('TTS cache write error:', error);
+      console.error('❌ TTS cache write error:', error);
       // Don't throw - caching failure shouldn't break the request
     }
   }
@@ -165,6 +192,7 @@ export class TTSService {
    * Pre-cache common phrases
    */
   async precacheCommonPhrases(): Promise<void> {
+    console.log('🔄 Pre-caching common TTS phrases...');
     const commonPhrases = [
       "Hello! I'm your AI tutor. What would you like to learn today?",
       "Great question! Let me explain that.",
@@ -176,13 +204,25 @@ export class TTSService {
       "Let's practice with an example.",
     ];
 
+    let cached = 0;
     for (const phrase of commonPhrases) {
       try {
         await this.generateSpeech(phrase);
+        cached++;
       } catch (error) {
-        console.error(`Failed to precache phrase: ${phrase}`, error);
+        console.error(`❌ Failed to precache phrase: ${phrase}`, error);
       }
     }
+    console.log(`✅ Pre-cached ${cached}/${commonPhrases.length} phrases`);
+  }
+  
+  /**
+   * Split text into sentences for streaming TTS
+   */
+  splitIntoSentences(text: string): string[] {
+    // Split on sentence boundaries
+    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+    return sentences.map(s => s.trim()).filter(s => s.length > 0);
   }
 }
 
