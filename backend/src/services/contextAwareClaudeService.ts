@@ -129,9 +129,8 @@ For in-scope questions:
           {
             type: 'text',
             text: systemPrompt,
-            // Enable prompt caching for the chapter content
             cache_control: { type: 'ephemeral' },
-          },
+          } as any, // Type assertion needed for cache_control
         ],
         messages: [
           ...conversationHistory.map((msg) => ({
