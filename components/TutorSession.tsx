@@ -30,6 +30,7 @@ class AudioQueueManager {
   private currentAudio: HTMLAudioElement | null = null;
 
   enqueue(audioBuffer: ArrayBuffer) {
+    console.log('🎵 Enqueueing audio chunk, size:', audioBuffer.byteLength);
     this.queue.push(audioBuffer);
     if (!this.isPlaying) {
       this.playNext();
@@ -38,6 +39,7 @@ class AudioQueueManager {
 
   private playNext() {
     if (this.queue.length === 0) {
+      console.log('✅ Audio queue empty, playback complete');
       this.isPlaying = false;
       return;
     }
@@ -48,22 +50,25 @@ class AudioQueueManager {
     const blob = new Blob([audioBuffer], { type: 'audio/mp3' });
     const url = URL.createObjectURL(blob);
     
+    console.log('▶️ Playing audio chunk, queue remaining:', this.queue.length);
     this.currentAudio = new Audio(url);
     this.currentAudio.play();
 
     this.currentAudio.onended = () => {
+      console.log('✅ Audio chunk finished');
       URL.revokeObjectURL(url);
       this.playNext(); // Play next chunk seamlessly
     };
 
     this.currentAudio.onerror = (error) => {
-      console.error('Audio playback error:', error);
+      console.error('❌ Audio playback error:', error);
       URL.revokeObjectURL(url);
       this.playNext(); // Try next chunk
     };
   }
 
   stop() {
+    console.log('⏹️ Stopping audio playback');
     if (this.currentAudio) {
       this.currentAudio.pause();
       this.currentAudio.currentTime = 0;
@@ -97,10 +102,19 @@ export default function TutorSession({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentAssistantMessage, setCurrentAssistantMessage] = useState('');
-  const [enableStreaming] = useState(true); // Toggle for streaming vs non-streaming
+  const [enableStreaming] = useState(false); // DISABLED for debugging - change to true once working
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const audioQueueRef = useRef(new AudioQueueManager());
+
+  // Debug logging
+  useEffect(() => {
+    console.log('🎬 TutorSession mounted');
+    console.log('Chapter ID:', chapterId);
+    console.log('Chapter Title:', chapterTitle);
+    console.log('Auth token exists:', !!token);
+    console.log('Streaming enabled:', enableStreaming);
+  }, []);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -109,16 +123,22 @@ export default function TutorSession({
 
   // Handle recording
   const handleStartRecording = async () => {
+    console.log('🎤 Start recording button clicked');
     await startRecording();
   };
 
   const handleStopRecording = async () => {
+    console.log('⏹️ Stop recording button clicked');
     stopRecording();
   };
 
   // Send audio to backend
   useEffect(() => {
     if (audioBlob && !isRecording) {
+      console.log('📦 Audio blob ready:', {
+        size: audioBlob.size,
+        type: audioBlob.type
+      });
       sendAudioMessage(audioBlob);
     }
   }, [audioBlob, isRecording]);
@@ -127,8 +147,21 @@ export default function TutorSession({
    * Send audio message with streaming support
    */
   const sendAudioMessage = async (blob: Blob) => {
-    if (!token) return;
+    console.log('📤 sendAudioMessage called');
+    
+    if (!token) {
+      console.error('❌ No auth token!');
+      alert('Not authenticated. Please log in.');
+      return;
+    }
 
+    if (!chapterId) {
+      console.error('❌ No chapter ID!');
+      alert('No chapter selected.');
+      return;
+    }
+
+    console.log('✅ Prerequisites check passed');
     setIsProcessing(true);
     setCurrentAssistantMessage('');
 
@@ -141,6 +174,13 @@ export default function TutorSession({
         formData.append('sessionId', sessionId);
       }
 
+      console.log('📋 FormData prepared:', {
+        chapterId,
+        sessionId,
+        streaming: enableStreaming,
+        audioSize: blob.size
+      });
+
       // Add user message immediately
       const userMessage: Message = {
         role: 'user',
@@ -148,25 +188,34 @@ export default function TutorSession({
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, userMessage]);
+      console.log('✅ User message added to UI');
+
+      console.log('🌐 Sending request to /api/chat...');
+      const startTime = Date.now();
 
       if (enableStreaming) {
-        await handleStreamingResponse(formData);
+        console.log('📡 Using streaming mode');
+        await handleStreamingResponse(formData, startTime);
       } else {
-        await handleNonStreamingResponse(formData);
+        console.log('📨 Using non-streaming mode');
+        await handleNonStreamingResponse(formData, startTime);
       }
     } catch (error) {
-      console.error('Error sending message:', error);
-      alert('Failed to send message. Please try again.');
+      console.error('❌ Error in sendAudioMessage:', error);
+      alert(`Failed to send message: ${(error as Error).message}`);
     } finally {
       setIsProcessing(false);
       clearRecording();
+      console.log('🏁 sendAudioMessage complete');
     }
   };
 
   /**
    * Handle streaming response (OPTIMIZED)
    */
-  const handleStreamingResponse = async (formData: FormData) => {
+  const handleStreamingResponse = async (formData: FormData, startTime: number) => {
+    console.log('📡 Starting streaming request...');
+    
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: {
@@ -175,8 +224,16 @@ export default function TutorSession({
       body: formData,
     });
 
+    console.log('📥 Response received:', {
+      status: res.status,
+      statusText: res.statusText,
+      contentType: res.headers.get('content-type')
+    });
+
     if (!res.ok) {
-      throw new Error('Failed to send message');
+      const errorText = await res.text();
+      console.error('❌ API error response:', errorText);
+      throw new Error(`API error: ${res.status} ${errorText}`);
     }
 
     const reader = res.body?.getReader();
@@ -189,10 +246,15 @@ export default function TutorSession({
     let buffer = '';
     let assistantMessageText = '';
 
+    console.log('📖 Reading SSE stream...');
+
     while (true) {
       const { done, value } = await reader.read();
       
-      if (done) break;
+      if (done) {
+        console.log('✅ Stream complete');
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n\n');
@@ -200,43 +262,50 @@ export default function TutorSession({
 
       for (const line of lines) {
         if (line.startsWith('data: ')) {
-          const data = JSON.parse(line.slice(6));
+          const dataStr = line.slice(6);
+          console.log('📨 SSE data received:', dataStr.substring(0, 100) + '...');
+          
+          try {
+            const data = JSON.parse(dataStr);
 
-          switch (data.type) {
-            case 'text':
-              // Update streaming text
-              assistantMessageText += data.data;
-              setCurrentAssistantMessage(assistantMessageText);
-              break;
+            switch (data.type) {
+              case 'text':
+                assistantMessageText += data.data;
+                setCurrentAssistantMessage(assistantMessageText);
+                console.log('📝 Text chunk added, total length:', assistantMessageText.length);
+                break;
 
-            case 'audio':
-              // Queue audio chunk for playback
-              const audioBuffer = base64ToArrayBuffer(data.data);
-              audioQueueRef.current.enqueue(audioBuffer);
-              break;
+              case 'audio':
+                const audioBuffer = base64ToArrayBuffer(data.data);
+                audioQueueRef.current.enqueue(audioBuffer);
+                console.log('🎵 Audio chunk queued');
+                break;
 
-            case 'complete':
-              // Finalize message
-              const assistantMessage: Message = {
-                role: 'assistant',
-                content: assistantMessageText,
-                timestamp: new Date(),
-              };
-              setMessages((prev) => [...prev, assistantMessage]);
-              setCurrentAssistantMessage('');
+              case 'complete':
+                console.log('✅ Stream complete event received');
+                const assistantMessage: Message = {
+                  role: 'assistant',
+                  content: assistantMessageText,
+                  timestamp: new Date(),
+                };
+                setMessages((prev) => [...prev, assistantMessage]);
+                setCurrentAssistantMessage('');
 
-              // Set session ID if first message
-              if (!sessionId) {
-                setSessionId(data.sessionId);
-              }
+                if (!sessionId) {
+                  setSessionId(data.sessionId);
+                  console.log('💾 Session ID saved:', data.sessionId);
+                }
 
-              console.log('Response latency:', data.latency, 'ms');
-              console.log('Costs:', data.costs);
-              break;
+                console.log('⏱️ Response latency:', data.latency, 'ms');
+                console.log('💰 Costs:', data.costs);
+                break;
 
-            case 'error':
-              console.error('Streaming error:', data.error);
-              throw new Error(data.error);
+              case 'error':
+                console.error('❌ Stream error:', data.error);
+                throw new Error(data.error);
+            }
+          } catch (parseError) {
+            console.error('❌ Failed to parse SSE data:', parseError, dataStr);
           }
         }
       }
@@ -246,7 +315,9 @@ export default function TutorSession({
   /**
    * Handle non-streaming response (FALLBACK)
    */
-  const handleNonStreamingResponse = async (formData: FormData) => {
+  const handleNonStreamingResponse = async (formData: FormData, startTime: number) => {
+    console.log('📨 Sending non-streaming request...');
+    
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: {
@@ -255,15 +326,31 @@ export default function TutorSession({
       body: formData,
     });
 
+    console.log('📥 Response received:', {
+      status: res.status,
+      statusText: res.statusText,
+      ok: res.ok
+    });
+
     if (!res.ok) {
-      throw new Error('Failed to send message');
+      const errorText = await res.text();
+      console.error('❌ API error response:', errorText);
+      throw new Error(`API error: ${res.status} ${errorText}`);
     }
 
     const data = await res.json();
+    console.log('📦 Response data:', {
+      hasMessage: !!data.message,
+      messageLength: data.message?.length,
+      hasAudio: !!data.audioBuffer,
+      sessionId: data.sessionId,
+      latency: data.latency
+    });
 
     // Set session ID if first message
     if (!sessionId) {
       setSessionId(data.sessionId);
+      console.log('💾 Session ID saved:', data.sessionId);
     }
 
     const assistantMessage: Message = {
@@ -274,20 +361,25 @@ export default function TutorSession({
     };
 
     setMessages((prev) => [...prev, assistantMessage]);
+    console.log('✅ Assistant message added to UI');
 
     // Play audio response
     if (data.audioBuffer) {
+      console.log('🎵 Playing audio response');
       playAudioResponse(data.audioBuffer);
+    } else {
+      console.log('⚠️ No audio buffer in response');
     }
 
-    console.log('Response latency:', data.latency, 'ms');
-    console.log('Costs:', data.costs);
+    console.log('⏱️ Response latency:', data.latency, 'ms');
+    console.log('💰 Costs:', data.costs);
   };
 
   /**
    * Play audio response (non-streaming fallback)
    */
   const playAudioResponse = (base64Audio: string) => {
+    console.log('🎵 Converting base64 to audio, length:', base64Audio.length);
     const audioBuffer = base64ToArrayBuffer(base64Audio);
     audioQueueRef.current.enqueue(audioBuffer);
   };
@@ -305,7 +397,7 @@ export default function TutorSession({
   };
 
   const handleEndSession = async () => {
-    // Stop any playing audio
+    console.log('🛑 Ending session');
     audioQueueRef.current.stop();
 
     if (sessionId) {
@@ -318,8 +410,9 @@ export default function TutorSession({
           },
           body: JSON.stringify({ completionReason: 'user_ended' }),
         });
+        console.log('✅ Session ended successfully');
       } catch (error) {
-        console.error('Error ending session:', error);
+        console.error('❌ Error ending session:', error);
       }
     }
     onSessionEnd?.();
@@ -332,7 +425,7 @@ export default function TutorSession({
         <div>
           <h1 className="text-2xl font-bold">{chapterTitle}</h1>
           <p className="text-sm text-gray-600">
-            AI Voice Tutor Session {enableStreaming && '⚡ (Streaming Enabled)'}
+            AI Voice Tutor Session {enableStreaming ? '⚡ (Streaming)' : '📨 (Non-Streaming)'}
           </p>
         </div>
         <Button variant="outline" onClick={handleEndSession}>
@@ -346,11 +439,9 @@ export default function TutorSession({
           <div className="text-center text-gray-500 py-12">
             <Mic className="w-16 h-16 mx-auto mb-4 opacity-50" />
             <p>Press the microphone button to start your tutoring session</p>
-            {enableStreaming && (
-              <p className="text-xs mt-2 text-green-600">
-                ⚡ Streaming enabled for faster responses!
-              </p>
-            )}
+            <p className="text-xs mt-2">
+              {enableStreaming ? '⚡ Streaming mode' : '📨 Non-streaming mode (stable)'}
+            </p>
           </div>
         ) : (
           <>
@@ -428,9 +519,7 @@ export default function TutorSession({
         {isProcessing && (
           <div className="text-center">
             <Loader2 className="w-12 h-12 animate-spin mx-auto mb-2" />
-            <p className="text-sm text-gray-600">
-              {enableStreaming ? 'Transcribing & streaming response...' : 'Processing...'}
-            </p>
+            <p className="text-sm text-gray-600">Processing your question...</p>
           </div>
         )}
       </div>
@@ -439,7 +528,7 @@ export default function TutorSession({
       <div className="mt-4 text-center text-xs text-gray-500">
         {isRecording && 'Recording... Press stop when done'}
         {!isRecording && !isProcessing && 'Press and hold to speak'}
-        {isProcessing && enableStreaming && 'Audio will start playing as response generates'}
+        {isProcessing && 'Check browser console (F12) for detailed logs'}
       </div>
     </div>
   );
