@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { Blob } from 'buffer';
+import { File as FormDataFile } from 'formdata-node';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -20,15 +20,11 @@ export class WhisperService {
     const startTime = Date.now();
 
     try {
-      // Convert Buffer to File using Blob
-      // First create a Blob from the buffer
-      const blob = new Blob([audioBuffer], { type: 'audio/mp3' });
-      
-      // Then create a File from the Blob
-      const file = new File([blob], filename, { type: 'audio/mp3' });
+      // Convert Buffer to File using formdata-node (compatible with Node.js)
+      const file = new FormDataFile([audioBuffer], filename, { type: 'audio/mp3' });
 
       const transcription = await openai.audio.transcriptions.create({
-        file,
+        file: file as any, // Type assertion for OpenAI SDK compatibility
         model: 'whisper-1',
         response_format: 'verbose_json',
       });
