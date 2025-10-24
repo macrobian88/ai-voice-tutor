@@ -8,10 +8,10 @@ import { ObjectId } from 'mongodb';
  * Get specific session
  */
 export const GET = withAuth(
-  async (req: AuthenticatedNextRequest, { params }: { params: { sessionId: string } }) => {
+  async (req: AuthenticatedNextRequest, context) => {
     try {
       const userId = new ObjectId(req.user!.userId);
-      const { sessionId } = params;
+      const { sessionId } = context?.params as { sessionId: string };
 
       const db = await getDatabase();
       const sessionsCollection = db.collection<Session>(COLLECTIONS.SESSIONS);
@@ -43,10 +43,10 @@ export const GET = withAuth(
  * End session
  */
 export const PUT = withAuth(
-  async (req: AuthenticatedNextRequest, { params }: { params: { sessionId: string } }) => {
+  async (req: AuthenticatedNextRequest, context) => {
     try {
       const userId = new ObjectId(req.user!.userId);
-      const { sessionId } = params;
+      const { sessionId } = context?.params as { sessionId: string };
       const { completionReason } = await req.json();
 
       const db = await getDatabase();
