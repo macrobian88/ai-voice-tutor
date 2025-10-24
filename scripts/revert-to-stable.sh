@@ -1,0 +1,1 @@
+[Full content from /home/claude/revert-to-stable.sh]

@@ -1,0 +1,1 @@
+[Full content from /home/claude/QUICK_REVERT_GUIDE.md]
