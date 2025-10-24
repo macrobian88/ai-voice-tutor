@@ -11,6 +11,7 @@
     "type-check": "tsc --noEmit",
     "test": "jest",
     "test:watch": "jest --watch",
+    "db:seed": "tsx scripts/seedDatabase.ts",
     "deploy:frontend": "npm run build && wrangler pages deploy .next",
     "deploy:backend": "cd backend && npm run deploy"
   },
@@ -28,6 +29,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "date-fns": "^3.3.1",
+    "form-data": "^4.0.0",
     "jsonwebtoken": "^9.0.2",
     "lamejs": "^1.2.1",
     "lucide-react": "^0.309.0",
@@ -58,6 +60,7 @@
     "jest": "^29.7.0",
     "postcss": "^8.4.33",
     "tailwindcss": "^3.4.1",
+    "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   },
   "engines": {
