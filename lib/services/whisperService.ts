@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import FormData from 'form-data';
+import { Blob } from 'buffer';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -20,8 +20,12 @@ export class WhisperService {
     const startTime = Date.now();
 
     try {
-      // Create a file from buffer
-      const file = new File([audioBuffer], filename, { type: 'audio/mp3' });
+      // Convert Buffer to File using Blob
+      // First create a Blob from the buffer
+      const blob = new Blob([audioBuffer], { type: 'audio/mp3' });
+      
+      // Then create a File from the Blob
+      const file = new File([blob], filename, { type: 'audio/mp3' });
 
       const transcription = await openai.audio.transcriptions.create({
         file,
