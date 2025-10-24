@@ -145,8 +145,7 @@ export class TTSService {
     });
 
     const results = await Promise.all(promises);
-    // Fixed TypeScript type assertion
-    return results.filter((r) => r !== null) as TTSChunkResult[];
+    return results.filter((r): r is TTSChunkResult => r !== null);
   }
 
   /**
@@ -157,12 +156,16 @@ export class TTSService {
     // Simple sentence boundary detection
     // Matches: . ! ? followed by space or end of string
     const sentenceRegex = /[^.!?]+[.!?]+(?:\s|$)/g;
-    const sentences = text.match(sentenceRegex) || [];
+    const matchedSentences = text.match(sentenceRegex);
+    const sentences: string[] = matchedSentences ? [...matchedSentences] : [];
     
     // Handle remaining text that doesn't end with punctuation
     const lastSentenceEnd = sentences.join('').length;
     if (lastSentenceEnd < text.length) {
-      sentences.push(text.substring(lastSentenceEnd).trim());
+      const remainingText = text.substring(lastSentenceEnd).trim();
+      if (remainingText.length > 0) {
+        sentences.push(remainingText);
+      }
     }
 
     return sentences.map(s => s.trim()).filter(s => s.length > 0);
