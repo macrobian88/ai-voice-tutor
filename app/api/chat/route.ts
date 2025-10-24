@@ -24,6 +24,7 @@ export const POST = withAuth(async (req: AuthenticatedNextRequest) => {
     const textMessage = formData.get('message') as string | null;
     const sessionId = formData.get('sessionId') as string | null;
     const chapterId = formData.get('chapterId') as string | null;
+    const streamEnabled = formData.get('stream') === 'true';
 
     // Validate input
     if (!audioFile && !textMessage) {
@@ -78,7 +79,6 @@ export const POST = withAuth(async (req: AuthenticatedNextRequest) => {
         .collection<Session>(COLLECTIONS.SESSIONS)
         .findOne({ _id: new ObjectId(sessionId) });
       if (session) {
-        // Include full message objects with timestamps
         history = session.messages;
       }
     }
@@ -126,7 +126,22 @@ export const POST = withAuth(async (req: AuthenticatedNextRequest) => {
       session = { ...newSession, _id: result.insertedId };
     }
 
-    // Step 4: Generate Claude response
+    // Step 4: Determine if we should use streaming
+    if (streamEnabled && scopeCheck.inScope) {
+      return handleStreamingResponse(
+        req,
+        userMessage,
+        chapter,
+        history,
+        scopeCheck,
+        session,
+        transcriptionCost,
+        audioDuration,
+        startTime
+      );
+    }
+
+    // Step 5: Generate Claude response (non-streaming fallback)
     const claudeResponse = await claudeService.chat(
       userMessage,
       chapter,
@@ -134,10 +149,10 @@ export const POST = withAuth(async (req: AuthenticatedNextRequest) => {
       scopeCheck
     );
 
-    // Step 5: Generate TTS for response
+    // Step 6: Generate TTS for response
     const ttsResult = await ttsService.generateSpeech(claudeResponse.response);
 
-    // Step 6: Save messages to session
+    // Step 7: Save messages to session
     const userMsg: SessionMessage = {
       role: 'user',
       content: userMessage,
@@ -197,7 +212,7 @@ export const POST = withAuth(async (req: AuthenticatedNextRequest) => {
       }
     );
 
-    // Step 7: Update user progress
+    // Step 8: Update user progress
     if (scopeCheck.inScope) {
       await chapterService.updateProgress(userId, chapterId, {
         sessionsCount: 1,
@@ -239,6 +254,193 @@ export const POST = withAuth(async (req: AuthenticatedNextRequest) => {
     );
   }
 });
+
+/**
+ * Handle streaming response for lower latency
+ */
+async function handleStreamingResponse(
+  req: AuthenticatedNextRequest,
+  userMessage: string,
+  chapter: any,
+  history: SessionMessage[],
+  scopeCheck: any,
+  session: Session,
+  transcriptionCost: number,
+  audioDuration: number,
+  startTime: number
+) {
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        let fullResponse = '';
+        let totalInputTokens = 0;
+        let totalOutputTokens = 0;
+        let cachedInputTokens = 0;
+        let ttsCost = 0;
+        let ttsCharacters = 0;
+        let audioChunks: Buffer[] = [];
+
+        // Stream Claude response and generate TTS in parallel
+        const claudeStream = claudeService.chatStream(
+          userMessage,
+          chapter,
+          history as any,
+          scopeCheck
+        );
+
+        let sentenceBuffer = '';
+
+        for await (const chunk of claudeStream) {
+          fullResponse += chunk.text;
+          sentenceBuffer += chunk.text;
+
+          // Check if we have complete sentences
+          const sentences = ttsService.splitIntoSentences(sentenceBuffer);
+          
+          if (sentences.length > 1 || chunk.isComplete) {
+            // Process all but the last sentence (which might be incomplete)
+            const completeSentences = chunk.isComplete ? sentences : sentences.slice(0, -1);
+            sentenceBuffer = chunk.isComplete ? '' : sentences[sentences.length - 1];
+
+            // Generate TTS for complete sentences
+            for (const sentence of completeSentences) {
+              if (sentence.trim()) {
+                const ttsResult = await ttsService.generateSpeech(sentence);
+                ttsCost += ttsResult.cost;
+                ttsCharacters += ttsResult.characters;
+
+                if (!ttsResult.cached) {
+                  audioChunks.push(ttsResult.audioBuffer);
+
+                  // Send audio chunk to client
+                  const data = JSON.stringify({
+                    type: 'audio',
+                    data: ttsResult.audioBuffer.toString('base64'),
+                    text: sentence,
+                  });
+                  controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                }
+              }
+            }
+          }
+
+          // Send text chunk to client
+          if (chunk.text) {
+            const data = JSON.stringify({
+              type: 'text',
+              data: chunk.text,
+            });
+            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+          }
+
+          // Update token counts on completion
+          if (chunk.isComplete && chunk.tokensUsed) {
+            totalInputTokens = chunk.tokensUsed.inputTokens;
+            totalOutputTokens = chunk.tokensUsed.outputTokens;
+            cachedInputTokens = chunk.tokensUsed.cachedInputTokens;
+          }
+        }
+
+        // Calculate final costs
+        const inputCost = (totalInputTokens * 3) / 1_000_000;
+        const cachedInputCost = (cachedInputTokens * 0.3) / 1_000_000;
+        const outputCost = (totalOutputTokens * 15) / 1_000_000;
+        const claudeCost = inputCost + cachedInputCost + outputCost;
+
+        // Save session data
+        const db = await getDatabase();
+        const userMsg: SessionMessage = {
+          role: 'user',
+          content: userMessage,
+          timestamp: new Date(),
+          isInScope: scopeCheck.inScope,
+          scopeConfidence: scopeCheck.confidence,
+          audioDurationMs: audioDuration * 1000,
+        };
+
+        const assistantMsg: SessionMessage = {
+          role: 'assistant',
+          content: fullResponse,
+          timestamp: new Date(),
+          tokensUsed: totalInputTokens + totalOutputTokens,
+          cachedTokens: cachedInputTokens,
+          generationLatency: Date.now() - startTime,
+          ttsCharacters,
+          ttsCached: false,
+        };
+
+        await db.collection<Session>(COLLECTIONS.SESSIONS).updateOne(
+          { _id: session._id },
+          {
+            $push: {
+              messages: { $each: [userMsg, assistantMsg] },
+            } as any,
+            $set: {
+              costs: {
+                whisperCost: session.costs.whisperCost + transcriptionCost,
+                claudeCost: session.costs.claudeCost + claudeCost,
+                ttsCost: session.costs.ttsCost + ttsCost,
+                totalCost: session.costs.totalCost + transcriptionCost + claudeCost + ttsCost,
+              },
+              tokens: {
+                inputTokens: session.tokens.inputTokens + totalInputTokens,
+                outputTokens: session.tokens.outputTokens + totalOutputTokens,
+                cachedInputTokens: session.tokens.cachedInputTokens + cachedInputTokens,
+                cacheCreationTokens: session.tokens.cacheCreationTokens,
+              },
+              tts: {
+                charactersGenerated: session.tts.charactersGenerated + ttsCharacters,
+                cacheHits: session.tts.cacheHits,
+                cacheMisses: session.tts.cacheMisses + audioChunks.length,
+              },
+              updatedAt: new Date(),
+            },
+          }
+        );
+
+        // Send completion event
+        const completionData = JSON.stringify({
+          type: 'complete',
+          sessionId: session._id!.toString(),
+          costs: {
+            whisper: transcriptionCost,
+            claude: claudeCost,
+            tts: ttsCost,
+            total: transcriptionCost + claudeCost + ttsCost,
+          },
+          tokens: {
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            cachedInputTokens,
+          },
+          latency: Date.now() - startTime,
+        });
+        controller.enqueue(encoder.encode(`data: ${completionData}\n\n`));
+
+        controller.close();
+      } catch (error) {
+        console.error('Streaming error:', error);
+        const errorData = JSON.stringify({
+          type: 'error',
+          error: (error as Error).message,
+        });
+        controller.enqueue(encoder.encode(`data: ${errorData}\n\n`));
+        controller.close();
+      }
+    },
+  });
+
+  return new NextResponse(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      ...corsHeaders(),
+    },
+  });
+}
 
 export async function OPTIONS() {
   return NextResponse.json({}, { headers: corsHeaders() });
