@@ -211,7 +211,7 @@ export interface Chapter {
   content: {
     concepts: ConceptSection[];
     examples: Example[];
-    practiceProblem s: PracticeProblem[];
+    practiceProblems: PracticeProblem[];
     keywords: string[];  // For scope detection
   };
   
