@@ -145,7 +145,8 @@ export class TTSService {
     });
 
     const results = await Promise.all(promises);
-    return results.filter((r): r is TTSChunkResult => r !== null);
+    // Fixed TypeScript type assertion
+    return results.filter((r) => r !== null) as TTSChunkResult[];
   }
 
   /**
