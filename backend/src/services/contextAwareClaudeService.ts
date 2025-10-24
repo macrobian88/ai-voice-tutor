@@ -2,6 +2,12 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ChapterService } from './chapterService';
 import { ObjectId } from 'mongodb';
 
+// Extended usage type to include prompt caching fields
+interface ExtendedUsage extends Anthropic.Usage {
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
 /**
  * Context-Aware Claude Service
  * Implements chapter-scoped conversations with cost optimization
@@ -148,14 +154,17 @@ For in-scope questions:
       const messageText =
         assistantMessage.type === 'text' ? assistantMessage.text : '';
 
+      // Cast usage to extended type to access caching fields
+      const usage = response.usage as ExtendedUsage;
+
       return {
         response: messageText,
         inScope: scopeCheck.inScope,
         scopeConfidence: scopeCheck.confidence,
         tokensUsed: {
-          input: response.usage.input_tokens,
-          output: response.usage.output_tokens,
-          cached: response.usage.cache_read_input_tokens || 0,
+          input: usage.input_tokens,
+          output: usage.output_tokens,
+          cached: usage.cache_read_input_tokens || 0,
         },
         wasFiltered: false,
       };
